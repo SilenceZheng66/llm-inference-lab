@@ -3,7 +3,7 @@
 # 用法：在 /mnt/workspace 下执行 bash setup_env.sh
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/<OWNER>/llm-inference-lab.git}"
+REPO_URL="${REPO_URL:-https://github.com/SilenceZheng66/llm-inference-lab.git}"
 cd /mnt/workspace
 
 if [ ! -d llm-inference-lab ]; then
