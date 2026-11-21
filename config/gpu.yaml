@@ -1,0 +1,16 @@
+# GPU 实例专用：真实 vLLM 后端 + mock 兜底（vLLM 未就绪时熔断自动走 mock-a）
+api_keys:
+  - sk-lab-demo-key
+strategy: least_queue
+health_interval_s: 5
+breaker_fail_threshold: 2
+breaker_cooldown_s: 15
+backends:
+  - name: vllm-qwen15b
+    base_url: http://127.0.0.1:8001/v1
+    model: qwen2.5-1.5b
+    weight: 3
+  - name: mock-fallback
+    base_url: http://127.0.0.1:8002/v1
+    model: mock-model
+    weight: 1

@@ -1,0 +1,20 @@
+# llm-inference-lab 配置（开发环境示例；密钥仅用于本地实验）
+api_keys:
+  - sk-lab-demo-key
+
+# round_robin | least_queue | prefix_hash | weighted
+strategy: round_robin
+
+health_interval_s: 5
+breaker_fail_threshold: 3
+breaker_cooldown_s: 20
+
+backends:
+  - name: mock-a
+    base_url: http://127.0.0.1:8001/v1
+    model: mock-model
+    weight: 2
+  - name: mock-b
+    base_url: http://127.0.0.1:8002/v1
+    model: mock-model
+    weight: 1
