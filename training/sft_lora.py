@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """手写 LoRA SFT 训练循环（transformers + peft，不依赖 Trainer）。
 
-刻意不用 Trainer 的原因：面试与代码评审需要能逐段解释——
+不依赖 Trainer 的原因：训练语义完全显式、可逐段审计——
 assistant loss mask、bf16 autocast 边界、梯度累积与有效 batch、
 检查点恢复语义（数据快进 + RNG 状态）、profiler 挂载点。
 

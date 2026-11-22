@@ -1,6 +1,6 @@
 # llm-inference-lab
 
-生产风格的大模型推理服务**全链路参考实现**（学习/转岗项目，非生产系统）：
+生产风格的大模型推理服务**全链路参考实现**：
 
 ```
 OpenAI 兼容客户端
@@ -18,10 +18,10 @@ OpenAI 兼容客户端
 
 ## 定位
 
-- 广度项目：把「接入 → 鉴权 → 注册表 → 智能路由 → 引擎池 → 熔断降级 → 可观测/成本」完整跑通一遍。
-- 后端即插即用：vLLM / SGLang / Ollama / llama.cpp server（均 OpenAI 兼容）+ 本地 mock（无 GPU 也能全链路演示）。
-- 实测数据进 README（TTFT / TPOT / 吞吐 / 附加延迟），作为面试展开的核心谈资。
-- 姊妹项目 [`infer-router`](../infer-router)：把本项目的路由层用 Go 重写为高性能独立组件。
+- 广度覆盖：把「接入 → 鉴权 → 注册表 → 智能路由 → 引擎池 → 熔断降级 → 可观测/成本」完整跑通一遍，每一层都可独立替换。
+- 后端即插即用：vLLM / SGLang / Ollama / llama.cpp server（均 OpenAI 兼容）+ 本地 mock（无 GPU 也能全链路联调）。
+- 实测数据进 README（TTFT / TPOT / 吞吐 / 附加延迟），随代码演进持续更新。
+- 独立组件版路由层见 [`infer-router`](https://github.com/SilenceZheng66/infer-router)：Go 实现、单静态二进制，可直接替换本项目的路由层。
 
 ## 快速开始（本地 CPU，无需 GPU）
 
@@ -66,12 +66,12 @@ curl -s localhost:8000/v1/chat/completions \
 ## 路线图
 
 - **P0**（已完成）：鉴权、RR 路由、流式/非流式转发、熔断 fallback、mock 全链路、compose 观测栈、Qwen2.5 真后端压测
-- **P1**（已完成）：**训练一体闭环**（手写 LoRA SFT + kill-resume + eval +25.3% + vLLM LoRA 服务化 + profiler，见上节）；least-queue/prefix-hash 调优与限流进行中（姊妹项目 [infer-router](https://github.com/SilenceZheng66/infer-router) 已实现 prefix_affinity 路由与双副本对照实测）
+- **P1**（已完成）：**训练一体闭环**（手写 LoRA SFT + kill-resume + eval +25.3% + vLLM LoRA 服务化 + profiler，见下节）；least-queue/prefix-hash 调优与限流进行中（[infer-router](https://github.com/SilenceZheng66/infer-router) 已实现 prefix_affinity 路由与双副本对照实测）
 - **P2（不做）**：多租户 RBAC、计费治理、云 provider 聚合、MCP
 
-## ModelScope 免费算力用法
+## 云端 GPU 部署（ModelScope Notebook 等）
 
-见 `notebooks/`：CPU 实例跑 mock 链路与单测；GPU 实例（约 36h 额度）分批起 vLLM 跑 Qwen2.5 真后端，模型缓存放 `/mnt/workspace` 持久目录，`resume.sh` 一键重启。
+见 `notebooks/`：CPU 实例跑 mock 链路与单测；GPU 实例分批起 vLLM 跑 Qwen2.5 真后端，模型缓存放持久目录（如 `/mnt/.workspace` 挂载盘），`resume.sh` 一键重启。
 
 ## 训推一体（training/）
 
@@ -98,7 +98,7 @@ prepare_data.py ──► sft_lora.py ──► serve_vllm_lora.sh ──► eva
 
 ### 调试实录：三个静默失败 bug
 
-训练"成功跑完但什么都没学到"的完整诊断过程（面试级素材，详见 lab-notes）：
+训练"成功跑完但什么都没学到"的完整诊断过程：
 
 1. HF `load_dataset` 加载 ModelScope 专属 repo → ConnectionError → MsDataset 优先 + HF 兜底；
 2. 批量组装字段错传整 dict → `KeyError: slice`；
@@ -119,7 +119,7 @@ python training/eval_compare.py compare <base.json> <tuned.json>
 
 
 
-## 网关压测数据（ModelScope 免费 A10 单卡，2026-11-22）
+## 网关压测数据（A10 单卡，2026-11-22）
 
 环境：NVIDIA A10 24GB / vLLM 0.10.1.1 / Qwen2.5-1.5B-Instruct（`--served-model-name qwen2.5-1.5b --max-model-len 8192 --gpu-memory-utilization 0.85`）；网关以 `config/gpu.yaml` 启动（vLLM 主后端 + mock 兜底，RR 路由）；压测 `bench/run_bench.py -n 32`（流式，经网关入口测量，含鉴权/路由/转发开销）。
 
@@ -129,6 +129,24 @@ python training/eval_compare.py compare <base.json> <tuned.json>
 | 8  | 1.18s  | 26.2 / 18.4 / 75.3 ms  | 13.2 / 19.5 ms | 514.9 tok/s | 606  | 0/32 |
 | 32 | 1.46s  | 273.4 / 282.9 / 294.5 ms | 11.6 / 14.8 ms | 823.9 tok/s | 1201 | 0/32 |
 
-解读：单并发 TTFT ~10ms（A10 上 1.5B 预填充很快）；并发 8 吞吐近 5 倍提升；并发 32 达 824 tok/s，TTFT 因排队升至 ~270ms 而 TPOT 几乎不变——瓶颈在排队而非解码。并发 8/32 档 tokens 偏少是因为 RR 把部分请求分给 mock 兜底后端（固定短回复），属网关混合后端下的真实口径。端到端冒烟：`e2e_check.py` 经网关拿到 Qwen2.5 真实流式回复，E2E OK。
+解读：单并发 TTFT ~10ms（A10 上 1.5B 预填充很快）；并发 8 吞吐近 5 倍提升；并发 32 达 824 tok/s，TTFT 因排队升至 ~270ms 而 TPOT 几乎不变——瓶颈在排队而非解码。并发 8/32 档 tokens 偏少是因为 RR 把部分请求分给 mock 兜底后端（固定短回复），属网关混合后端下的实际行为。端到端冒烟：`e2e_check.py` 经网关拿到 Qwen2.5 真实流式回复，E2E OK。
 
-> 诚实口径：本项目为学习/作品集项目，未接入真实生产流量，不声明 SLA / 高可用 / 大规模并发能力；性能结论仅来自本地与免费算力环境的实测。
+## 生产推荐配置
+
+```yaml
+# config/gpu.yaml —— 真后端生产形态（节选）
+api_keys: [<从环境变量/密管系统注入>]      # 不要把 demo key 用于生产
+routing:
+  strategy: prefix_hash                  # 会话级前缀亲和；与 infer-router 组合时由其承担
+health:
+  interval_s: 3
+  endpoint: /models
+breaker:
+  fail_threshold: 3
+  cooldown_s: 10
+backends:
+  - { name: vllm-slm, base_url: "http://vllm-slm.svc:8001", model: qwen2.5-1.5b }
+  - { name: vllm-llm, base_url: "http://vllm-llm.svc:8001", model: qwen2.5-7b }
+```
+
+部署要点：网关与 vLLM 以 systemd/容器分进程托管，uvicorn 多 worker（`--workers 4`）；Prometheus 抓取 `:8000/metrics`（lab_* 指标）并按 `backend` 维度告警；鉴权 key 走密管系统注入而非配置文件明文；成本归因计价表（`app/observability/cost.py`）按实际供应商价目配置；生产链路建议将路由层替换/前挂 [infer-router](https://github.com/SilenceZheng66/infer-router)（Go 静态二进制，承担会话亲和）。

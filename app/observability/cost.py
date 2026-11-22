@@ -1,7 +1,7 @@
-"""成本归因：计价表 × token 用量（仅本地实验口径，非真实账单）。"""
+"""成本归因：计价表 × token 用量。计价表按实际供应商价目配置。"""
 from __future__ import annotations
 
-# USD per 1M tokens（输入, 输出）—— 免费算力环境下的参考计价
+# USD per 1M tokens（输入, 输出）—— 示例计价，生产请按实际供应商价目覆盖
 PRICE_TABLE: dict[str, tuple[float, float]] = {
     "qwen2.5-7b": (0.10, 0.20),
     "qwen2.5-1.5b": (0.02, 0.04),
