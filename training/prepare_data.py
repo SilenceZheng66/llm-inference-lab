@@ -54,12 +54,24 @@ def md5_of(path: Path) -> str:
 
 
 def load_raw(dataset_id: str, n_need: int, task_hint: bool):
-    """从 ModelScope 拉原始样本。datasets 缺失时给出可执行提示而不是静默失败。"""
+    """优先 ModelScope（dataset_id 为 ModelScope 仓库名），失败时回退 HF Hub。
+
+    注意：HF 的 load_dataset 只认 HF Hub 上的仓库；AI-ModelScope/... 这类
+    ModelScope 专属 id 在 HF 上不存在，会以 ConnectionError 失败而非清晰报错，
+    因此 ModelScope id 必须走 MsDataset，这里用双源兜底并打印实际来源。
+    """
     try:
-        from datasets import load_dataset
-    except ImportError as e:
-        sys.exit(f"缺少依赖：请先 pip install datasets modelscope（原因：{e}）")
-    ds = load_dataset(dataset_id, split="train")
+        from modelscope.msdatasets import MsDataset
+        ds = MsDataset.load(dataset_id, split="train")
+        print("[info] dataset source = modelscope")
+    except Exception as e:  # noqa: BLE001 - 双源兜底需要捕获任意加载失败
+        print(f"[info] ModelScope 加载失败（{type(e).__name__}），回退 HF Hub：{e}")
+        try:
+            from datasets import load_dataset
+        except ImportError as e2:
+            sys.exit(f"缺少依赖：请先 pip install datasets modelscope（原因：{e2}）")
+        ds = load_dataset(dataset_id, split="train")
+        print("[info] dataset source = hf")
     rows = []
     for r in ds:
         out = (r.get("output") or "").strip()
