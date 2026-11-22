@@ -173,6 +173,9 @@ def main() -> None:
         else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
     model = get_peft_model(model, lcfg)
     model.gradient_checkpointing_enable()
+    # 经典坑：gradient checkpointing 下输入 embedding 不要求梯度时，
+    # 反传链在 embedding 处断裂，LoRA 参数梯度恒零、loss 全程平坦。
+    model.enable_input_require_grads()
     model.print_trainable_parameters()
 
     optimizer = build_optimizer(model, tcfg["lr"], tcfg["weight_decay"])
@@ -183,12 +186,17 @@ def main() -> None:
     if args.resume:
         ck = run_dir / "checkpoint"
         state = torch.load(ck / "trainer_state.pt", map_location="cpu", weights_only=False)
-        from peft import set_peft_model_state_dict  # noqa: F401 (adapter 由 save_pretrained 加载)
+        # 恢复 adapter 权重：save_pretrained 落盘的 safetensors 必须显式装回。
+        # 否则 get_peft_model 的随机 LoRA（B=0，行为等价 base）会"悄悄"丢弃
+        # kill 前的全部训练成果，loss 看似接续实则从零开始。
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+        set_peft_model_state_dict(model, load_file(str(ck / "adapter_model.safetensors")))
         global_step, consumed = state["global_step"], state["consumed_samples"]
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
         restore_rng(state["rng"])
-        print(f"[resume] step={global_step} consumed={consumed}")
+        print(f"[resume] step={global_step} consumed={consumed} (adapter weights restored)")
 
     collate = Collator(pad_id)
     examples = examples[consumed:]          # 快进：不重不漏
