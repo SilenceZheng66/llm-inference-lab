@@ -157,7 +157,7 @@ def main() -> None:
     rng = random.Random(cfg["data"]["seed"])
     rng.shuffle(rows)
     seq = rows * int(tcfg["epochs"])
-    examples = [build_supervised_example(tok, m, tcfg["max_seq_len"]) for m in seq]
+    examples = [build_supervised_example(tok, m["messages"], tcfg["max_seq_len"]) for m in seq]
     bs, accum = tcfg["per_device_batch_size"], tcfg["grad_accum_steps"]
     steps_per_epoch = math.ceil(len(rows) / (bs * accum))
     total_steps = steps_per_epoch * int(tcfg["epochs"])
