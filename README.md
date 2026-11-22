@@ -65,15 +65,61 @@ curl -s localhost:8000/v1/chat/completions \
 
 ## 路线图
 
-- **P0**（当前）：鉴权、RR 路由、流式/非流式转发、熔断 fallback、mock 全链路、compose 观测栈
-- **P1**：least-queue/prefix-hash 实战调优、限流、前缀命中率统计、SGLang 真后端对比压测（vLLM/Qwen2.5 实测见上节）
+- **P0**（已完成）：鉴权、RR 路由、流式/非流式转发、熔断 fallback、mock 全链路、compose 观测栈、Qwen2.5 真后端压测
+- **P1**（已完成）：**训练一体闭环**（手写 LoRA SFT + kill-resume + eval +25.3% + vLLM LoRA 服务化 + profiler，见上节）；least-queue/prefix-hash 调优与限流进行中（姊妹项目 [infer-router](https://github.com/SilenceZheng66/infer-router) 已实现 prefix_affinity 路由与双副本对照实测）
 - **P2（不做）**：多租户 RBAC、计费治理、云 provider 聚合、MCP
 
 ## ModelScope 免费算力用法
 
 见 `notebooks/`：CPU 实例跑 mock 链路与单测；GPU 实例（约 36h 额度）分批起 vLLM 跑 Qwen2.5 真后端，模型缓存放 `/mnt/workspace` 持久目录，`resume.sh` 一键重启。
 
-## 实测数据（ModelScope 免费 A10 单卡，2026-11-22）
+## 训推一体（training/）
+
+推理之外，本仓库用手写训练循环补齐「训」的一侧——**不依赖 TRL/LLaMA-Factory 等高层封装**，直接基于 `transformers` + `peft` 实现 LoRA SFT 全流程，并与本仓库的 vLLM 推理栈闭环：
+
+```
+prepare_data.py ──► sft_lora.py ──► serve_vllm_lora.sh ──► eval_compare.py
+   数据管线           手写训练循环        LoRA 服务化          base vs tuned 对比
+  (MsDataset,      (assistant-mask,   (单实例双 model,      (ROUGE-L / coverage
+   json 筛选)       bf16, accum,       --enable-lora)        / latency 同口径)
+                    cosine, ckpt,
+                    resume, profiler)
+```
+
+### 实测结果（Qwen2.5-1.5B + alpaca-gpt4-data-zh json 子集，A10 单卡）
+
+| 项 | 结果 |
+|---|---|
+| LoRA SFT（r8 α32 all-linear，1200 样本，150 step） | loss 1.15 → 0.9 区间，B 范数 0.10-0.25（真实更新） |
+| **eval 对比（50 条同口径）** | **rouge_l 0.3025 → 0.3789（+25.3%）**，latency 2.177 → 2.044s |
+| kill-resume | kill -9 @step50 → resume，loss jump 0.051（阈值 0.35）PASS |
+| vLLM LoRA 服务化 | 单实例同时服务 base + adapter；json 行为差异实证：tuned 输出向训练分布收敛（整数价格/库存） |
+| profiler | torch.profiler trace + step 表（tok_s ≈ 1667，峰值显存 6.82GB） |
+
+### 调试实录：三个静默失败 bug
+
+训练"成功跑完但什么都没学到"的完整诊断过程（面试级素材，详见 lab-notes）：
+
+1. HF `load_dataset` 加载 ModelScope 专属 repo → ConnectionError → MsDataset 优先 + HF 兜底；
+2. 批量组装字段错传整 dict → `KeyError: slice`；
+3. **最隐蔽的两个**：`gradient_checkpointing_enable()` 后未调 `enable_input_require_grads()` → embedding 无梯度 → **LoRA 梯度恒零 → loss 全程平坦 → adapter 是 B=0 恒等映射**；resume 未加载 adapter_model.safetensors → kill 前成果静默丢失。诊断路径：loss 平坦 → lr 正常 → 打印 lora_B 范数判决。
+
+### 用法
+
+```bash
+python training/prepare_data.py          # 数据下载与筛选（out_dir 可配）
+python training/sft_lora.py              # 训练（config.yaml 驱动，支持 --resume）
+bash training/resume_test.sh             # kill-resume 演练（自动断点续训并校验 loss 接续）
+bash training/serve_vllm_lora.sh         # vLLM LoRA 服务化（base + adapter 同端点）
+python training/eval_compare.py --config training/config.yaml run --model-mode base|tuned --out <f>
+python training/eval_compare.py compare <base.json> <tuned.json>
+```
+
+配套单测 `tests/test_prepare_data.py`（pytest 全绿）。`training/ddp_gloo_demo.py` 为 CPU 可跑的 DDP/gloo 通信演示。
+
+
+
+## 网关压测数据（ModelScope 免费 A10 单卡，2026-11-22）
 
 环境：NVIDIA A10 24GB / vLLM 0.10.1.1 / Qwen2.5-1.5B-Instruct（`--served-model-name qwen2.5-1.5b --max-model-len 8192 --gpu-memory-utilization 0.85`）；网关以 `config/gpu.yaml` 启动（vLLM 主后端 + mock 兜底，RR 路由）；压测 `bench/run_bench.py -n 32`（流式，经网关入口测量，含鉴权/路由/转发开销）。
 
