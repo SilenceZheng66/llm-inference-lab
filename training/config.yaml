@@ -1,0 +1,35 @@
+# 训练闭环超参集中管理。所有脚本 --config 读取，命令行参数可覆盖。
+data:
+  dataset_id: AI-ModelScope/alpaca-gpt4-data-zh   # ModelScope 公开数据集（Apache-2.0）
+  train_samples: 1200
+  eval_samples: 100
+  seed: 42
+  out_dir: /mnt/workspace/data/sft-activity       # 容器内持久目录
+  task_hint: json                                  # 筛选含固定格式任务的样本，使 eval 差异可显性度量
+
+model:
+  base_model: /mnt/workspace/models/qwen2.5-1.5b   # 本地缓存，免下载
+  lora_rank: 8
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: all-linear                       # q/k/v/o/gate/up/down 全投影
+
+train:
+  epochs: 2
+  per_device_batch_size: 4
+  grad_accum_steps: 4                              # 有效 batch = 16
+  lr: 1.0e-4
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_seq_len: 1024
+  grad_clip: 1.0
+  log_every: 5
+  ckpt_every: 50
+  out_dir: /mnt/workspace/runs/sft-activity
+  profile: false                                   # true 时开启 torch.profiler 导出 trace
+  profile_steps: "10:30"                           # 起止 step 区间
+
+vllm:
+  port: 8001
+  adapter_name: qwen15b-activity
+  max_lora_rank: 16
